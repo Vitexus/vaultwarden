@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="console-application">
+  <id>com.github.dani_garcia.vaultwarden</id>
+  <metadata_license>FSFAP</metadata_license>
+  <project_license>AGPL-3.0-only</project_license>
+  <name>Vaultwarden</name>
+  <summary>Unofficial Bitwarden compatible server written in Rust</summary>
+  <description>
+    <p>Vaultwarden is an alternative implementation of the Bitwarden server API written in Rust. It is compatible with upstream Bitwarden clients and is perfect for self-hosted deployment where running the official resource-heavy service might not be ideal.</p>
+    <p>This package contains the vaultwarden API server binary that can be configured to work with SQLite, MySQL/MariaDB, or PostgreSQL database backends.</p>
+  </description>
+  <url type="homepage">https://github.com/dani-garcia/vaultwarden</url>
+  <provides>
+    <binary>vaultwarden</binary>
+  </provides>
+  <icon type="stock">vaultwarden</icon>
+  <categories>
+    <category>Security</category>
+  </categories>
+</component>
