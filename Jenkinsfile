@@ -1,0 +1,99 @@
+#!groovy
+
+String[] distributions = ['debian:trixie']
+
+String vendor = 'vitexsoftware'
+
+properties([
+    copyArtifactPermission('Foregin/*')
+])
+node() {
+    ansiColor('xterm') {
+        stage('SCM Checkout') {
+            checkout scm
+        }
+    }
+}
+
+def branches = [:]
+distributions.each { distro ->
+    branches[distro] = {
+        def distroName = distro
+        println  "Dist:" + distroName
+
+        def dist = distroName.split(':')
+        def distroFamily = dist[0]
+        def distroCode = dist[1]
+        def buildImage = ''
+        def artifacts = []
+        def buildVer = ''
+
+        node {
+            ansiColor('xterm') {
+                stage('Checkout ' + distroName) {
+                    checkout scm
+                    def imageName = vendor + '/' + distro
+                    buildImage = docker.image(imageName)
+                    sh 'git checkout debian/changelog'
+                    def version = sh (
+                        script: 'dpkg-parsechangelog --show-field Version',
+                        returnStdout: true
+                    ).trim()
+                    buildVer = version + '.' + env.BUILD_NUMBER  + '~' + distroCode
+                }
+                stage('Build ' + distroName) {
+                    buildImage.inside('--network=host') {
+                        withEnv(["BUILDVER=${buildVer}"]) {
+                            sh 'dch -b -v "$BUILDVER" "$BUILD_TAG"'
+                        }
+                        sh 'sudo apt-get update --allow-releaseinfo-change'
+                        sh 'sudo chown jenkins:jenkins ..'
+                        sh 'debuild-pbuilder -r"sudo -E" -i -us -uc -b'
+                        sh '''
+                            mkdir -p $WORKSPACE/dist/debian/
+                            rm -rf $WORKSPACE/dist/debian/*
+                            while read -r deb _; do
+                                case "$deb" in -*) continue;; esac
+                                [ -n "$deb" ] || continue
+                                mv -- "../$deb" "$WORKSPACE/dist/debian/"
+                            done < debian/files
+                        '''
+                        artifacts = sh (
+                            script: "cat debian/files | awk '{print \$1}'",
+                            returnStdout: true
+                        ).trim().split('\n')
+                    }
+                }
+
+                stage('Archive artifacts ' + distroName) {
+                    buildImage.inside {
+                        artifacts.each { deb_file ->
+                            println "Archiving artifact: " + deb_file
+                            archiveArtifacts artifacts: 'dist/debian/' + deb_file
+                        }
+
+                        sh '''
+                            set -e
+                            if [ -f debian/files ]; then
+                              while read -r file _; do
+                                [ -n "$file" ] || continue
+                                rm -f "dist/debian/$file" || true
+                                rm -f "../$file" || true
+                                rm -f "$WORKSPACE/$file" || true
+                              done < debian/files
+                            fi
+                        '''
+                    }
+                }
+            }
+        }
+    }
+}
+
+parallel branches
+
+node {
+    stage('Publish to Aptly') {
+        publishDebToAptly()
+    }
+}
