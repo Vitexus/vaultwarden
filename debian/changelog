@@ -1,3 +1,16 @@
+vaultwarden (1.37.3-1) unstable; urgency=high
+
+  * update to 1.37.3 (previous: 1.36.0), see also:
+    https://github.com/dani-garcia/vaultwarden/releases/tag/1.37.0
+  * Required for Bitwarden clients 2026.7.0+ (bw CLI 2026.x fails
+    'bw list items' against 1.36.x with: invalid type JsValue(Object),
+    expected a string)
+  * Contains security fixes (SSRF via icon endpoint, cross-organization
+    cipher access, send access-count bypass, WebSocket flooding, and others)
+  * Requires a web vault 2026.7.0 or newer (vaultwarden-web-vault)
+
+ -- Vítězslav Dvořák <info@vitexsoftware.cz>  Thu, 01 Oct 2026 12:48:17 +0200
+
 vaultwarden (1.36.0-1) unstable; urgency=high
 
   * update to 1.36.0, see also: https://github.com/dani-garcia/vaultwarden/releases/tag/1.36.0
