@@ -2,7 +2,7 @@
 // The recursion_limit is mainly triggered by the json!() macro.
 // The more key/value pairs there are the more recursion occurs.
 // We want to keep this as low as possible!
-#![recursion_limit = "165"]
+#![recursion_limit = "192"]
 
 // When enabled use MiMalloc as malloc instead of the default malloc
 #[cfg(feature = "enable_mimalloc")]
@@ -137,9 +137,7 @@ fn parse_args() {
 
     if let Some(command) = pargs.subcommand().unwrap_or_default() {
         if command == "hash" {
-            use argon2::{
-                Algorithm::Argon2id, Argon2, ParamsBuilder, PasswordHasher, Version::V0x13, password_hash::SaltString,
-            };
+            use argon2::{Algorithm::Argon2id, Argon2, ParamsBuilder, PasswordHasher, Version::V0x13};
 
             let mut argon2_params = ParamsBuilder::new();
             let preset: Option<String> = pargs.opt_value_from_str(["-p", "--preset"]).unwrap_or_default();
@@ -172,10 +170,10 @@ fn parse_args() {
             }
 
             let argon2 = Argon2::new(Argon2id, V0x13, argon2_params.build().unwrap());
-            let salt = SaltString::encode_b64(&crypto::get_random_bytes::<32>()).unwrap();
+            let salt = crypto::get_random_bytes::<32>();
 
             let argon2_timer = tokio::time::Instant::now();
-            if let Ok(password_hash) = argon2.hash_password(password.as_bytes(), &salt) {
+            if let Ok(password_hash) = argon2.hash_password_with_salt(password.as_bytes(), &salt) {
                 println!(
                     "\n\
                     ADMIN_TOKEN='{password_hash}'\n\n\

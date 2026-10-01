@@ -21,6 +21,7 @@ use super::{
     User, UserId,
 };
 
+// See (v2026.7.0): https://github.com/bitwarden/server/blob/5d4461aa42cadbacfef8fe2166c5453a5c52773a/src/Core/AdminConsole/Entities/Collection.cs
 #[derive(Identifiable, Queryable, Insertable, AsChangeset)]
 #[diesel(table_name = collections)]
 #[diesel(treat_none_as_null = true)]
@@ -71,6 +72,11 @@ impl Collection {
             "id": self.uuid,
             "organizationId": self.org_uuid,
             "name": self.name,
+            // Collection types are either 0: SharedCollection or 1: DefaultUserCollection, of which we do not yet support DefaultUserCollection.
+            // See (v2026.7.0): https://github.com/bitwarden/server/blob/5d4461aa42cadbacfef8fe2166c5453a5c52773a/src/Core/AdminConsole/Enums/CollectionType.cs
+            "type": 0,
+            // This is only used together with MyItems/DefaultUserCollection, which we do not yet support.
+            "defaultUserCollectionEmail": null,
             "object": "collection",
         })
     }
@@ -162,24 +168,16 @@ impl Collection {
         self.update_users_revision(conn).await;
 
         db_run! { conn:
-            sqlite, mysql {
-                match diesel::replace_into(collections::table)
+            mysql {
+                diesel::insert_into(collections::table)
                     .values(self)
+                    .on_conflict(diesel::dsl::DuplicatedKeys)
+                    .do_update()
+                    .set(self)
                     .execute(conn)
-                {
-                    Ok(_) => Ok(()),
-                    // Record already exists and causes a Foreign Key Violation because replace_into() wants to delete the record first.
-                    Err(diesel::result::Error::DatabaseError(diesel::result::DatabaseErrorKind::ForeignKeyViolation, _)) => {
-                        diesel::update(collections::table)
-                            .filter(collections::uuid.eq(&self.uuid))
-                            .set(self)
-                            .execute(conn)
-                            .map_res("Error saving collection")
-                    }
-                    Err(e) => Err(e.into()),
-                }.map_res("Error saving collection")
+                    .map_res("Error saving collection")
             }
-            postgresql {
+            postgresql, sqlite {
                 diesel::insert_into(collections::table)
                     .values(self)
                     .on_conflict(collections::uuid)
@@ -623,6 +621,47 @@ impl Collection {
     pub async fn is_manageable_by_user(&self, user_uuid: &UserId, conn: &DbConn) -> bool {
         Self::is_coll_manageable_by_user(&self.uuid, user_uuid, conn).await
     }
+
+    // Whether the user has manage access to at least one collection in the org, directly or via a
+    // group. Org-scoped counterpart of is_coll_manageable_by_user.
+    pub async fn has_manageable_collection_by_user(
+        org_uuid: &OrganizationId,
+        user_uuid: &UserId,
+        conn: &DbConn,
+    ) -> bool {
+        let org_uuid = org_uuid.to_string();
+        let user_uuid = user_uuid.to_string();
+        conn.run(move |conn| {
+            collections::table
+                .left_join(
+                    users_collections::table.on(users_collections::collection_uuid
+                        .eq(collections::uuid)
+                        .and(users_collections::user_uuid.eq(user_uuid.clone()))),
+                )
+                .left_join(
+                    users_organizations::table.on(collections::org_uuid
+                        .eq(users_organizations::org_uuid)
+                        .and(users_organizations::user_uuid.eq(user_uuid))),
+                )
+                .left_join(groups_users::table.on(groups_users::users_organizations_uuid.eq(users_organizations::uuid)))
+                .left_join(
+                    collections_groups::table.on(collections_groups::groups_uuid
+                        .eq(groups_users::groups_uuid)
+                        .and(collections_groups::collections_uuid.eq(collections::uuid))),
+                )
+                .filter(collections::org_uuid.eq(&org_uuid))
+                .filter(
+                    // Manage permission on a collection assigned directly or via a group.
+                    users_collections::manage.eq(true).or(collections_groups::manage.eq(true)),
+                )
+                .count()
+                .first::<i64>(conn)
+                .ok()
+                .unwrap_or(0)
+                != 0
+        })
+        .await
+    }
 }
 
 /// Database methods
@@ -681,53 +720,30 @@ impl CollectionUser {
     ) -> EmptyResult {
         User::update_uuid_revision(user_uuid, conn).await;
 
+        let values = (
+            users_collections::user_uuid.eq(user_uuid),
+            users_collections::collection_uuid.eq(collection_uuid),
+            users_collections::read_only.eq(read_only),
+            users_collections::hide_passwords.eq(hide_passwords),
+            users_collections::manage.eq(manage),
+        );
+
         db_run! { conn:
-            sqlite, mysql {
-                match diesel::replace_into(users_collections::table)
-                    .values((
-                        users_collections::user_uuid.eq(user_uuid),
-                        users_collections::collection_uuid.eq(collection_uuid),
-                        users_collections::read_only.eq(read_only),
-                        users_collections::hide_passwords.eq(hide_passwords),
-                        users_collections::manage.eq(manage),
-                    ))
-                    .execute(conn)
-                {
-                    Ok(_) => Ok(()),
-                    // Record already exists and causes a Foreign Key Violation because replace_into() wants to delete the record first.
-                    Err(diesel::result::Error::DatabaseError(diesel::result::DatabaseErrorKind::ForeignKeyViolation, _)) => {
-                        diesel::update(users_collections::table)
-                            .filter(users_collections::user_uuid.eq(user_uuid))
-                            .filter(users_collections::collection_uuid.eq(collection_uuid))
-                            .set((
-                                users_collections::user_uuid.eq(user_uuid),
-                                users_collections::collection_uuid.eq(collection_uuid),
-                                users_collections::read_only.eq(read_only),
-                                users_collections::hide_passwords.eq(hide_passwords),
-                                users_collections::manage.eq(manage),
-                            ))
-                            .execute(conn)
-                            .map_res("Error adding user to collection")
-                    }
-                    Err(e) => Err(e.into()),
-                }.map_res("Error adding user to collection")
-            }
-            postgresql {
+            mysql {
                 diesel::insert_into(users_collections::table)
-                    .values((
-                        users_collections::user_uuid.eq(user_uuid),
-                        users_collections::collection_uuid.eq(collection_uuid),
-                        users_collections::read_only.eq(read_only),
-                        users_collections::hide_passwords.eq(hide_passwords),
-                        users_collections::manage.eq(manage),
-                    ))
+                    .values(values)
+                    .on_conflict(diesel::dsl::DuplicatedKeys)
+                    .do_update()
+                    .set(values)
+                    .execute(conn)
+                    .map_res("Error adding user to collection")
+            }
+            postgresql, sqlite {
+                diesel::insert_into(users_collections::table)
+                    .values(values)
                     .on_conflict((users_collections::user_uuid, users_collections::collection_uuid))
                     .do_update()
-                    .set((
-                        users_collections::read_only.eq(read_only),
-                        users_collections::hide_passwords.eq(hide_passwords),
-                        users_collections::manage.eq(manage),
-                    ))
+                    .set(values)
                     .execute(conn)
                     .map_res("Error adding user to collection")
             }
@@ -862,19 +878,18 @@ impl CollectionCipher {
         Self::update_users_revision(collection_uuid, conn).await;
 
         db_run! { conn:
-            sqlite, mysql {
-                // Not checking for ForeignKey Constraints here.
-                // Table ciphers_collections does not have ForeignKey Constraints which would cause conflicts.
-                // This table has no constraints pointing to itself, but only to others.
-                diesel::replace_into(ciphers_collections::table)
+            mysql {
+                diesel::insert_into(ciphers_collections::table)
                     .values((
                         ciphers_collections::cipher_uuid.eq(cipher_uuid),
                         ciphers_collections::collection_uuid.eq(collection_uuid),
                     ))
+                    .on_conflict(diesel::dsl::DuplicatedKeys)
+                    .do_nothing()
                     .execute(conn)
                     .map_res("Error adding cipher to collection")
             }
-            postgresql {
+            postgresql, sqlite {
                 diesel::insert_into(ciphers_collections::table)
                     .values((
                         ciphers_collections::cipher_uuid.eq(cipher_uuid),
