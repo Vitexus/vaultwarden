@@ -20,7 +20,7 @@ Package: vaultwarden
 Architecture: any
 Depends: adduser,
          coreutils,
-         vaultwarden-web-vault,
+         vaultwarden-web-vault (>= 2026.7.0),
          ${misc:Depends},
          ${shlibs:Depends},
 Suggests: sqlite3 | postgresql | default-mysql-server | virtual-mysql-server,
